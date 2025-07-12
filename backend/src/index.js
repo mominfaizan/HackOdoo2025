@@ -25,6 +25,9 @@ const authenticate = (req, res, next) => {
     res.status(401).json({ error: "Invalid token" });
   }
 };
+app.get("/", (req, res) => {
+  res.json({ message: "StackIt API is running" });
+});
 
 // Auth Routes
 app.post("/auth/signup", async (req, res) => {
