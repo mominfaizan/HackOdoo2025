@@ -38,10 +38,13 @@ model Tag {
 }
 
 model Vote {
-  id     Int  @id @default(autoincrement())
+  id     Int     @id @default(autoincrement())
   upvote Boolean
-  user   User @relation(fields: [userId], references: [id])
+  user   User    @relation(fields: [userId], references: [id])
   userId Int
-  post   Post @relation(fields: [postId], references: [id])
+  post   Post    @relation(fields: [postId], references: [id])
   postId Int
+
+  // Add this composite unique constraint
+  @@unique([userId, postId], name: "userId_postId")
 }

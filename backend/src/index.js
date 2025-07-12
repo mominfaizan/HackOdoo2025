@@ -1,4 +1,10 @@
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
+console.log("Env Path:", path.resolve(__dirname, "../.env"));
+const temp_JWT =
+  "9554422f901ac728c06891dbbd77e4fba1a3c03a11df3a07bbced09ee02eb616";
+console.log("JWT_SECRET:", temp_JWT);
+
 const express = require("express");
 const cors = require("cors");
 const bcrypt = require("bcryptjs");
@@ -18,7 +24,7 @@ const authenticate = (req, res, next) => {
   if (!token) return res.status(401).json({ error: "Unauthorized" });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, temp_JWT);
     req.user = { id: decoded.userId };
     next();
   } catch (err) {
@@ -31,36 +37,100 @@ app.get("/", (req, res) => {
 
 // Auth Routes
 app.post("/auth/signup", async (req, res) => {
-  const { email, password, name } = req.body;
-  const hashedPassword = await bcrypt.hash(password, 10);
-
   try {
+    const { email, password, name } = req.body;
+
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    // Check if user exists first
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already in use" });
+    }
+
+    // Create user
+    const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
       data: { email, password: hashedPassword, name },
     });
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
+
+    // Verify JWT_SECRET is available
+    if (!temp_JWT) {
+      throw new Error("JWT_SECRET missing");
+    }
+
+    // Generate token
+    const token = jwt.sign({ userId: user.id }, temp_JWT, {
       expiresIn: "1h",
     });
-    res.json({ token });
+
+    return res.json({
+      success: true,
+      token,
+      user: { id: user.id, email: user.email },
+    });
   } catch (err) {
-    res.status(400).json({ error: "User already exists" });
+    console.error("Signup Error:", err);
+    return res.status(500).json({
+      error: "Registration failed",
+      details: err.message,
+    });
   }
 });
-
 app.post("/auth/login", async (req, res) => {
-  const { email, password } = req.body;
-  const user = await prisma.user.findUnique({ where: { email } });
+  try {
+    const { email, password } = req.body;
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ error: "Invalid credentials" });
+    // Validation
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    // Find user with password field
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, password: true },
+    });
+
+    if (!user) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Password comparison
+    const passwordValid = await bcrypt.compare(password, user.password);
+    if (!passwordValid) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Verify JWT_SECRET
+    if (!temp_JWT) {
+      throw new Error("JWT_SECRET missing");
+    }
+
+    // Generate token
+    const token = jwt.sign({ userId: user.id }, temp_JWT, {
+      expiresIn: "1h",
+    });
+
+    return res.json({
+      success: true,
+      token,
+      user: { id: user.id },
+    });
+  } catch (err) {
+    console.error("Login Error:", err);
+    return res.status(500).json({
+      error: "Login failed",
+      details: err.message,
+    });
   }
-
-  const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, {
-    expiresIn: "1h",
-  });
-  res.json({ token });
 });
-
 // Posts Routes
 app.get("/posts", async (req, res) => {
   const questions = await prisma.post.findMany({
@@ -95,18 +165,62 @@ app.post("/posts", authenticate, async (req, res) => {
   res.json(post);
 });
 
-// Voting
 app.post("/posts/:id/vote", authenticate, async (req, res) => {
-  const { upvote } = req.body;
-  const postId = parseInt(req.params.id);
+  try {
+    const { upvote } = req.body;
+    const postId = parseInt(req.params.id);
+    const userId = req.user.id;
 
-  await prisma.vote.upsert({
-    where: { userId_postId: { userId: req.user.id, postId } },
-    update: { upvote },
-    create: { upvote, userId: req.user.id, postId },
-  });
+    // Validate input
+    if (typeof upvote !== "boolean") {
+      return res.status(400).json({ error: "Upvote must be a boolean" });
+    }
 
-  res.json({ success: true });
+    // Check if post exists
+    const postExists = await prisma.post.findUnique({
+      where: { id: postId },
+    });
+    if (!postExists) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+
+    // Upsert vote
+    const vote = await prisma.vote.upsert({
+      where: {
+        userId_postId: {
+          // This matches the @@unique name in schema
+          userId,
+          postId,
+        },
+      },
+      update: { upvote },
+      create: {
+        upvote,
+        userId,
+        postId,
+      },
+    });
+
+    // Get updated vote count
+    const voteCount = await prisma.vote.count({
+      where: {
+        postId,
+        upvote: true,
+      },
+    });
+
+    res.json({
+      success: true,
+      vote,
+      voteCount,
+    });
+  } catch (err) {
+    console.error("Voting error:", err);
+    res.status(500).json({
+      error: "Voting failed",
+      details: process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
 });
 
 // Tags
