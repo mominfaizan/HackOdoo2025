@@ -1,4 +1,5 @@
 # HackOdoo2025
 
-#Problem statment:
+Problem statment:
+
 StackIt – A Minimal Q&A Forum Platform
